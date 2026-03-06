@@ -84,6 +84,16 @@ export function createAccessMiddleware(options: AccessMiddlewareOptions) {
       }
     }
 
+    // Allow requests authenticated with the gateway Bearer token (e.g. from service bindings)
+    const authHeader = c.req.header('Authorization');
+    if (authHeader && c.env.MOLTBOT_GATEWAY_TOKEN) {
+      const token = authHeader.replace(/^Bearer\s+/i, '');
+      if (token === c.env.MOLTBOT_GATEWAY_TOKEN) {
+        c.set('accessUser', { email: 'service@internal', name: 'Service Token' });
+        return next();
+      }
+    }
+
     // Get JWT
     const jwt = extractJWT(c);
 
