@@ -159,6 +159,12 @@ config.gateway.port = 18789;
 config.gateway.mode = 'local';
 config.gateway.trustedProxies = ['10.1.0.0'];
 
+// Enable HTTP API endpoints (for MCP server and external integrations)
+config.gateway.http = config.gateway.http || {};
+config.gateway.http.endpoints = config.gateway.http.endpoints || {};
+config.gateway.http.endpoints.chatCompletions = { enabled: true };
+config.gateway.http.endpoints.responses = { enabled: true };
+
 if (process.env.OPENCLAW_GATEWAY_TOKEN) {
     config.gateway.auth = config.gateway.auth || {};
     config.gateway.auth.token = process.env.OPENCLAW_GATEWAY_TOKEN;
