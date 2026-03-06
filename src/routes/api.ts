@@ -295,6 +295,206 @@ adminApi.post('/gateway/restart', async (c) => {
   }
 });
 
+// =============================================================================
+// Skills Management API
+// =============================================================================
+
+// GET /api/admin/skills - List installed skills and their status
+adminApi.get('/skills', async (c) => {
+  const sandbox = c.get('sandbox');
+
+  try {
+    await ensureMoltbotGateway(sandbox, c.env);
+
+    // List skill files from workspace and managed dirs
+    // Skills are stored as either <dir>/<skill-name>/SKILL.md or <dir>/<skill-name>.md
+    const result = await sandbox.exec(
+      'find /root/clawd/skills /root/.openclaw/skills -name "*.md" -type f 2>/dev/null | head -100',
+    );
+    const files = (result.stdout || '').trim().split('\n').filter(Boolean);
+
+    // Read openclaw config for skill settings
+    const configResult = await sandbox.exec('cat /root/.openclaw/openclaw.json 2>/dev/null || echo "{}"');
+    let skillEntries: Record<string, { enabled?: boolean; apiKey?: string }> = {};
+    try {
+      const config = JSON.parse(configResult.stdout || '{}');
+      skillEntries = config?.skills?.entries || {};
+    } catch {
+      // ignore parse errors
+    }
+
+    const skills = [];
+    for (const filePath of files) {
+      const parts = filePath.split('/');
+      const fileName = parts[parts.length - 1] || '';
+      // If file is SKILL.md, use parent dir name; otherwise use filename without .md
+      const name = fileName === 'SKILL.md'
+        ? (parts[parts.length - 2] || 'unknown')
+        : fileName.replace('.md', '');
+      const dir = filePath.includes('/root/clawd/skills') ? 'workspace' : 'managed';
+      const config = skillEntries[name];
+      skills.push({
+        name,
+        filePath,
+        source: dir,
+        enabled: config?.enabled !== false,
+        hasApiKey: !!config?.apiKey,
+      });
+    }
+
+    return c.json({ ok: true, skills });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ ok: false, error: errorMessage }, 500);
+  }
+});
+
+// GET /api/admin/skills/:name - Get skill content
+adminApi.get('/skills/:name', async (c) => {
+  const sandbox = c.get('sandbox');
+  const name = c.req.param('name');
+
+  try {
+    await ensureMoltbotGateway(sandbox, c.env);
+
+    // Try workspace first, then managed; check both <name>/SKILL.md and <name>.md
+    let content = '';
+    let filePath = '';
+    for (const dir of ['/root/clawd/skills', '/root/.openclaw/skills']) {
+      for (const candidate of [`${dir}/${name}/SKILL.md`, `${dir}/${name}.md`]) {
+        const result = await sandbox.exec(`cat "${candidate}" 2>/dev/null`);
+        if (result.stdout) {
+          content = result.stdout;
+          filePath = candidate;
+          break;
+        }
+      }
+      if (content) break;
+    }
+
+    if (!content) {
+      return c.json({ ok: false, error: `Skill not found: ${name}` }, 404);
+    }
+
+    return c.json({ ok: true, name, filePath, content });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ ok: false, error: errorMessage }, 500);
+  }
+});
+
+// PUT /api/admin/skills/:name - Create or update a skill
+adminApi.put('/skills/:name', async (c) => {
+  const sandbox = c.get('sandbox');
+  const name = c.req.param('name');
+
+  try {
+    const body = await c.req.json<{ content: string; dir?: string }>();
+    if (!body.content) {
+      return c.json({ ok: false, error: 'content is required' }, 400);
+    }
+
+    // Validate skill name (alphanumeric, hyphens, underscores only)
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+      return c.json({ ok: false, error: 'Invalid skill name. Use alphanumeric, hyphens, underscores only.' }, 400);
+    }
+
+    await ensureMoltbotGateway(sandbox, c.env);
+
+    const targetDir = body.dir === 'managed' ? '/root/.openclaw/skills' : '/root/clawd/skills';
+    const skillDir = `${targetDir}/${name}`;
+    await sandbox.exec(`mkdir -p "${skillDir}"`);
+
+    const filePath = `${skillDir}/SKILL.md`;
+    await sandbox.writeFile(filePath, body.content);
+
+    return c.json({ ok: true, name, filePath, message: `Skill ${name} saved` });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ ok: false, error: errorMessage }, 500);
+  }
+});
+
+// DELETE /api/admin/skills/:name - Delete a skill
+adminApi.delete('/skills/:name', async (c) => {
+  const sandbox = c.get('sandbox');
+  const name = c.req.param('name');
+
+  try {
+    await ensureMoltbotGateway(sandbox, c.env);
+
+    // Try to delete from both dirs; check both <name>/SKILL.md and <name>.md
+    let deleted = false;
+    for (const dir of ['/root/clawd/skills', '/root/.openclaw/skills']) {
+      // Check for directory-based skill first
+      const dirCheck = await sandbox.exec(`test -d "${dir}/${name}" && echo yes || echo no`);
+      if (dirCheck.stdout?.trim() === 'yes') {
+        await sandbox.exec(`rm -rf "${dir}/${name}"`);
+        deleted = true;
+        continue;
+      }
+      // Check for flat file
+      const fileCheck = await sandbox.exec(`test -f "${dir}/${name}.md" && echo yes || echo no`);
+      if (fileCheck.stdout?.trim() === 'yes') {
+        await sandbox.exec(`rm "${dir}/${name}.md"`);
+        deleted = true;
+      }
+    }
+
+    if (!deleted) {
+      return c.json({ ok: false, error: `Skill not found: ${name}` }, 404);
+    }
+
+    return c.json({ ok: true, name, message: `Skill ${name} deleted` });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ ok: false, error: errorMessage }, 500);
+  }
+});
+
+// PATCH /api/admin/skills/:name/config - Update skill config (enable/disable, API key, env)
+adminApi.patch('/skills/:name/config', async (c) => {
+  const sandbox = c.get('sandbox');
+  const name = c.req.param('name');
+
+  try {
+    const body = await c.req.json<{ enabled?: boolean; apiKey?: string; env?: Record<string, string> }>();
+
+    await ensureMoltbotGateway(sandbox, c.env);
+
+    // Read current config
+    const configResult = await sandbox.exec('cat /root/.openclaw/openclaw.json 2>/dev/null || echo "{}"');
+    const config = JSON.parse(configResult.stdout || '{}');
+
+    // Update skill entry
+    config.skills = config.skills || {};
+    config.skills.entries = config.skills.entries || {};
+    const entry = config.skills.entries[name] || {};
+
+    if (typeof body.enabled === 'boolean') entry.enabled = body.enabled;
+    if (typeof body.apiKey === 'string') {
+      if (body.apiKey.trim()) entry.apiKey = body.apiKey.trim();
+      else delete entry.apiKey;
+    }
+    if (body.env && typeof body.env === 'object') {
+      entry.env = entry.env || {};
+      for (const [key, value] of Object.entries(body.env)) {
+        if (value.trim()) entry.env[key] = value.trim();
+        else delete entry.env[key];
+      }
+    }
+
+    config.skills.entries[name] = entry;
+
+    await sandbox.writeFile('/root/.openclaw/openclaw.json', JSON.stringify(config, null, 2));
+
+    return c.json({ ok: true, name, config: entry, message: `Skill ${name} config updated` });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ ok: false, error: errorMessage }, 500);
+  }
+});
+
 // Mount admin API routes under /admin
 api.route('/admin', adminApi);
 
