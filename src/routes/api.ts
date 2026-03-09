@@ -495,6 +495,290 @@ adminApi.patch('/skills/:name/config', async (c) => {
   }
 });
 
+// =============================================================================
+// Agents Management API
+// =============================================================================
+
+// GET /api/admin/agents - List configured agents
+adminApi.get('/agents', async (c) => {
+  const sandbox = c.get('sandbox');
+  try {
+    await ensureMoltbotGateway(sandbox, c.env);
+
+    const configResult = await sandbox.exec('cat /root/.openclaw/openclaw.json 2>/dev/null || echo "{}"');
+    let config: any = {};
+    try { config = JSON.parse(configResult.stdout || '{}'); } catch { /* empty */ }
+
+    const agentsList = config?.agents?.list || [];
+    const defaultId = config?.agents?.defaultId || 'main';
+
+    const agents = agentsList.map((entry: any) => ({
+      id: entry.id,
+      name: entry.name,
+      workspace: entry.workspace,
+      model: typeof entry.model === 'string' ? entry.model : entry.model?.primary,
+      identity: entry.identity,
+      isDefault: entry.id === defaultId,
+    }));
+
+    // If no agents configured, return at least the default
+    if (agents.length === 0) {
+      agents.push({ id: defaultId, name: 'Main', isDefault: true });
+    }
+
+    return c.json({ ok: true, agents, defaultId });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ ok: false, error: errorMessage }, 500);
+  }
+});
+
+// POST /api/admin/agents - Create a new agent
+adminApi.post('/agents', async (c) => {
+  const sandbox = c.get('sandbox');
+  try {
+    await ensureMoltbotGateway(sandbox, c.env);
+
+    const body = await c.req.json<{ name: string; workspace?: string; emoji?: string; model?: string }>();
+    if (!body.name?.trim()) {
+      return c.json({ ok: false, error: 'name is required' }, 400);
+    }
+
+    // Normalize ID from name
+    const agentId = body.name.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+    if (!agentId) {
+      return c.json({ ok: false, error: 'invalid agent name' }, 400);
+    }
+
+    // Read current config
+    const configResult = await sandbox.exec('cat /root/.openclaw/openclaw.json 2>/dev/null || echo "{}"');
+    let config: any = {};
+    try { config = JSON.parse(configResult.stdout || '{}'); } catch { /* empty */ }
+
+    // Check if agent already exists
+    const list = config?.agents?.list || [];
+    if (list.some((e: any) => e.id === agentId)) {
+      return c.json({ ok: false, error: `agent '${agentId}' already exists` }, 409);
+    }
+
+    // Build agent entry
+    const workspace = body.workspace || `/root/clawd/agents/${agentId}`;
+    const entry: any = { id: agentId, name: body.name.trim(), workspace };
+    if (body.model) entry.model = body.model;
+    if (body.emoji) entry.identity = { emoji: body.emoji };
+
+    // Add to config
+    if (!config.agents) config.agents = {};
+    if (!config.agents.list) config.agents.list = [];
+    config.agents.list.push(entry);
+
+    // Write config
+    const configJson = JSON.stringify(config, null, 2);
+    await sandbox.exec(`cat > /root/.openclaw/openclaw.json << 'CONFIGEOF'\n${configJson}\nCONFIGEOF`);
+
+    // Create workspace directory with bootstrap files
+    await sandbox.exec(`mkdir -p "${workspace}"`);
+    await sandbox.exec(`echo "# ${body.name.trim()}" > "${workspace}/MEMORY.md"`);
+
+    return c.json({ ok: true, agentId, name: body.name.trim(), workspace });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ ok: false, error: errorMessage }, 500);
+  }
+});
+
+// PATCH /api/admin/agents/:id - Update an agent
+adminApi.patch('/agents/:id', async (c) => {
+  const sandbox = c.get('sandbox');
+  const agentId = c.req.param('id');
+
+  try {
+    await ensureMoltbotGateway(sandbox, c.env);
+
+    const body = await c.req.json<{ name?: string; workspace?: string; model?: string; avatar?: string }>();
+
+    const configResult = await sandbox.exec('cat /root/.openclaw/openclaw.json 2>/dev/null || echo "{}"');
+    let config: any = {};
+    try { config = JSON.parse(configResult.stdout || '{}'); } catch { /* empty */ }
+
+    const list = config?.agents?.list || [];
+    const index = list.findIndex((e: any) => e.id === agentId);
+    if (index < 0) {
+      return c.json({ ok: false, error: `agent '${agentId}' not found` }, 404);
+    }
+
+    // Apply updates
+    if (body.name) list[index].name = body.name;
+    if (body.workspace) list[index].workspace = body.workspace;
+    if (body.model) list[index].model = body.model;
+    if (body.avatar) {
+      list[index].identity = { ...(list[index].identity || {}), avatar: body.avatar };
+    }
+
+    config.agents.list = list;
+    const configJson = JSON.stringify(config, null, 2);
+    await sandbox.exec(`cat > /root/.openclaw/openclaw.json << 'CONFIGEOF'\n${configJson}\nCONFIGEOF`);
+
+    return c.json({ ok: true, agentId });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ ok: false, error: errorMessage }, 500);
+  }
+});
+
+// DELETE /api/admin/agents/:id - Delete an agent
+adminApi.delete('/agents/:id', async (c) => {
+  const sandbox = c.get('sandbox');
+  const agentId = c.req.param('id');
+
+  try {
+    await ensureMoltbotGateway(sandbox, c.env);
+
+    const deleteFiles = c.req.query('deleteFiles') !== 'false';
+
+    const configResult = await sandbox.exec('cat /root/.openclaw/openclaw.json 2>/dev/null || echo "{}"');
+    let config: any = {};
+    try { config = JSON.parse(configResult.stdout || '{}'); } catch { /* empty */ }
+
+    const list = config?.agents?.list || [];
+    const index = list.findIndex((e: any) => e.id === agentId);
+    if (index < 0) {
+      return c.json({ ok: false, error: `agent '${agentId}' not found` }, 404);
+    }
+
+    const workspace = list[index].workspace;
+
+    // Remove from list
+    list.splice(index, 1);
+    config.agents.list = list.length > 0 ? list : undefined;
+
+    // Remove agent from bindings
+    let removedBindings = 0;
+    if (Array.isArray(config.bindings)) {
+      const before = config.bindings.length;
+      config.bindings = config.bindings.filter((b: any) => b.agentId !== agentId);
+      removedBindings = before - config.bindings.length;
+      if (config.bindings.length === 0) delete config.bindings;
+    }
+
+    const configJson = JSON.stringify(config, null, 2);
+    await sandbox.exec(`cat > /root/.openclaw/openclaw.json << 'CONFIGEOF'\n${configJson}\nCONFIGEOF`);
+
+    // Delete workspace files if requested
+    if (deleteFiles && workspace) {
+      await sandbox.exec(`rm -rf "${workspace}" 2>/dev/null || true`);
+    }
+
+    return c.json({ ok: true, agentId, removedBindings });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ ok: false, error: errorMessage }, 500);
+  }
+});
+
+// GET /api/admin/agents/:id/files - List agent workspace files
+adminApi.get('/agents/:id/files', async (c) => {
+  const sandbox = c.get('sandbox');
+  const agentId = c.req.param('id');
+
+  try {
+    await ensureMoltbotGateway(sandbox, c.env);
+
+    const configResult = await sandbox.exec('cat /root/.openclaw/openclaw.json 2>/dev/null || echo "{}"');
+    let config: any = {};
+    try { config = JSON.parse(configResult.stdout || '{}'); } catch { /* empty */ }
+
+    const list = config?.agents?.list || [];
+    const entry = list.find((e: any) => e.id === agentId);
+    const workspace = entry?.workspace || `/root/clawd/agents/${agentId}`;
+
+    const result = await sandbox.exec(`find "${workspace}" -maxdepth 1 -name "*.md" -type f 2>/dev/null | head -20`);
+    const files = (result.stdout || '').trim().split('\n').filter(Boolean).map((path: string) => {
+      const name = path.split('/').pop() || path;
+      return { name, path };
+    });
+
+    return c.json({ ok: true, agentId, workspace, files });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ ok: false, error: errorMessage }, 500);
+  }
+});
+
+// GET /api/admin/agents/:id/files/:name - Read agent file
+adminApi.get('/agents/:id/files/:name', async (c) => {
+  const sandbox = c.get('sandbox');
+  const agentId = c.req.param('id');
+  const fileName = c.req.param('name');
+
+  // Only allow .md files
+  if (!fileName.endsWith('.md')) {
+    return c.json({ ok: false, error: 'only .md files allowed' }, 400);
+  }
+
+  try {
+    await ensureMoltbotGateway(sandbox, c.env);
+
+    const configResult = await sandbox.exec('cat /root/.openclaw/openclaw.json 2>/dev/null || echo "{}"');
+    let config: any = {};
+    try { config = JSON.parse(configResult.stdout || '{}'); } catch { /* empty */ }
+
+    const list = config?.agents?.list || [];
+    const entry = list.find((e: any) => e.id === agentId);
+    const workspace = entry?.workspace || `/root/clawd/agents/${agentId}`;
+    const filePath = `${workspace}/${fileName}`;
+
+    const result = await sandbox.exec(`cat "${filePath}" 2>/dev/null`);
+    if (result.exitCode !== 0) {
+      return c.json({ ok: true, agentId, file: { name: fileName, path: filePath, missing: true } });
+    }
+
+    return c.json({ ok: true, agentId, file: { name: fileName, path: filePath, missing: false, content: result.stdout } });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ ok: false, error: errorMessage }, 500);
+  }
+});
+
+// PUT /api/admin/agents/:id/files/:name - Write agent file
+adminApi.put('/agents/:id/files/:name', async (c) => {
+  const sandbox = c.get('sandbox');
+  const agentId = c.req.param('id');
+  const fileName = c.req.param('name');
+
+  if (!fileName.endsWith('.md')) {
+    return c.json({ ok: false, error: 'only .md files allowed' }, 400);
+  }
+
+  try {
+    await ensureMoltbotGateway(sandbox, c.env);
+
+    const body = await c.req.json<{ content: string }>();
+    if (typeof body.content !== 'string') {
+      return c.json({ ok: false, error: 'content is required' }, 400);
+    }
+
+    const configResult = await sandbox.exec('cat /root/.openclaw/openclaw.json 2>/dev/null || echo "{}"');
+    let config: any = {};
+    try { config = JSON.parse(configResult.stdout || '{}'); } catch { /* empty */ }
+
+    const list = config?.agents?.list || [];
+    const entry = list.find((e: any) => e.id === agentId);
+    const workspace = entry?.workspace || `/root/clawd/agents/${agentId}`;
+    const filePath = `${workspace}/${fileName}`;
+
+    await sandbox.exec(`mkdir -p "${workspace}"`);
+    // Use base64 to safely write content with special characters
+    const b64 = Buffer.from(body.content).toString('base64');
+    await sandbox.exec(`echo "${b64}" | base64 -d > "${filePath}"`);
+
+    return c.json({ ok: true, agentId, file: { name: fileName, path: filePath, size: body.content.length } });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ ok: false, error: errorMessage }, 500);
+  }
+});
+
 // Mount admin API routes under /admin
 api.route('/admin', adminApi);
 
