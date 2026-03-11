@@ -270,6 +270,21 @@ if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
 config.tools = config.tools || {};
 config.tools.profile = 'full';
 
+// Browser: enable with headless mode for container environment
+config.browser = config.browser || {};
+config.browser.enabled = true;
+config.browser.headless = true;
+config.browser.noSandbox = true;
+
+// Web search: store Brave API key in config if env var is set
+if (process.env.BRAVE_API_KEY) {
+    config.tools = config.tools || {};
+    config.tools.web = config.tools.web || {};
+    config.tools.web.search = config.tools.web.search || {};
+    config.tools.web.search.apiKey = process.env.BRAVE_API_KEY;
+    console.log('Brave API key configured for web_search');
+}
+
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 console.log('Configuration patched successfully');
 EOFPATCH
