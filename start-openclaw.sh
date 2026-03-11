@@ -266,6 +266,10 @@ if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
     };
 }
 
+// Tool profile: "full" allows all tools (exec, browser, web_search, etc.)
+config.tools = config.tools || {};
+config.tools.profile = 'full';
+
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 console.log('Configuration patched successfully');
 EOFPATCH

@@ -496,6 +496,55 @@ adminApi.patch('/skills/:name/config', async (c) => {
 });
 
 // =============================================================================
+// Gateway Config API
+// =============================================================================
+
+// GET /api/admin/config - Read openclaw.json
+adminApi.get('/config', async (c) => {
+  const sandbox = c.get('sandbox');
+  try {
+    await ensureMoltbotGateway(sandbox, c.env);
+    const configResult = await sandbox.exec('cat /root/.openclaw/openclaw.json 2>/dev/null || echo "{}"');
+    let config: any = {};
+    try { config = JSON.parse(configResult.stdout || '{}'); } catch { /* empty */ }
+    return c.json({ ok: true, config });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ ok: false, error: errorMessage }, 500);
+  }
+});
+
+// PATCH /api/admin/config - Merge-update openclaw.json (shallow merge at top-level keys)
+adminApi.patch('/config', async (c) => {
+  const sandbox = c.get('sandbox');
+  try {
+    await ensureMoltbotGateway(sandbox, c.env);
+    const body = await c.req.json();
+
+    const configResult = await sandbox.exec('cat /root/.openclaw/openclaw.json 2>/dev/null || echo "{}"');
+    let config: any = {};
+    try { config = JSON.parse(configResult.stdout || '{}'); } catch { /* empty */ }
+
+    // Deep merge for known nested keys, shallow for the rest
+    for (const [key, value] of Object.entries(body)) {
+      if (typeof value === 'object' && value !== null && !Array.isArray(value) && typeof config[key] === 'object') {
+        config[key] = { ...config[key], ...value };
+      } else {
+        config[key] = value;
+      }
+    }
+
+    const configJson = JSON.stringify(config, null, 2);
+    await sandbox.exec(`cat > /root/.openclaw/openclaw.json << 'CONFIGEOF'\n${configJson}\nCONFIGEOF`);
+
+    return c.json({ ok: true, config });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ ok: false, error: errorMessage }, 500);
+  }
+});
+
+// =============================================================================
 // Agents Management API
 // =============================================================================
 
@@ -601,8 +650,17 @@ adminApi.patch('/agents/:id', async (c) => {
     let config: any = {};
     try { config = JSON.parse(configResult.stdout || '{}'); } catch { /* empty */ }
 
-    const list = config?.agents?.list || [];
-    const index = list.findIndex((e: any) => e.id === agentId);
+    if (!config.agents) config.agents = {};
+    if (!config.agents.list) config.agents.list = [];
+    const list = config.agents.list;
+    let index = list.findIndex((e: any) => e.id === agentId);
+
+    // Auto-create implicit default agent entry if not in list
+    const defaultId = config.agents.defaultId || 'main';
+    if (index < 0 && agentId === defaultId) {
+      list.push({ id: agentId, name: 'Main', workspace: `/root/clawd/agents/${agentId}` });
+      index = list.length - 1;
+    }
     if (index < 0) {
       return c.json({ ok: false, error: `agent '${agentId}' not found` }, 404);
     }
