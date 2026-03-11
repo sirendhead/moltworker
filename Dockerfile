@@ -17,6 +17,33 @@ RUN ARCH="$(dpkg --print-architecture)" \
     && node --version \
     && npm --version
 
+# Install Google Chrome stable for browser tool (headless)
+# Ubuntu Jammy's chromium-browser is a snap wrapper — doesn't work in containers.
+# Use the official Google Chrome .deb which provides /usr/bin/google-chrome-stable.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libcups2 \
+    libxss1 \
+    && wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+    && dpkg -i /tmp/chrome.deb || apt-get install -f -y \
+    && rm /tmp/chrome.deb \
+    && rm -rf /var/lib/apt/lists/* \
+    && google-chrome-stable --version
+ENV CHROME_PATH=/usr/bin/google-chrome-stable
+
 # Install pnpm globally
 RUN npm install -g pnpm
 

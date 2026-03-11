@@ -271,10 +271,12 @@ config.tools = config.tools || {};
 config.tools.profile = 'full';
 
 // Browser: enable with headless mode for container environment
+// Set executablePath explicitly — xdg-settings default-browser detection won't work headless
 config.browser = config.browser || {};
 config.browser.enabled = true;
 config.browser.headless = true;
 config.browser.noSandbox = true;
+config.browser.executablePath = '/usr/bin/google-chrome-stable';
 
 // Web search: store Brave API key in config if env var is set
 if (process.env.BRAVE_API_KEY) {
