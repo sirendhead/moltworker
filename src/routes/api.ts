@@ -837,6 +837,41 @@ adminApi.put('/agents/:id/files/:name', async (c) => {
   }
 });
 
+// =============================================================================
+// Shell Exec API
+// =============================================================================
+
+// POST /api/admin/exec - Execute a shell command in the sandbox container
+adminApi.post('/exec', async (c) => {
+  const sandbox = c.get('sandbox');
+
+  try {
+    const body = await c.req.json<{ command: string; cwd?: string; timeout?: number }>();
+    if (!body.command?.trim()) {
+      return c.json({ ok: false, error: 'command is required' }, 400);
+    }
+
+    await ensureMoltbotGateway(sandbox, c.env);
+
+    // Build the command, optionally cd to cwd first
+    const cmd = body.cwd
+      ? `cd "${body.cwd}" && ${body.command}`
+      : body.command;
+
+    const result = await sandbox.exec(cmd);
+
+    return c.json({
+      ok: true,
+      exitCode: result.exitCode ?? 0,
+      stdout: result.stdout || '',
+      stderr: result.stderr || '',
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ ok: false, error: errorMessage }, 500);
+  }
+});
+
 // Mount admin API routes under /admin
 api.route('/admin', adminApi);
 
