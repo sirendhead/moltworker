@@ -307,19 +307,30 @@ config.agents.defaults.compaction.memoryFlush = {
     forceFlushTranscriptBytes: '2mb',
 };
 
-// 5. Concurrency — allow parallel agent work
+// 5. Concurrency — allow parallel agent work (agent teams)
 config.agents.defaults.maxConcurrent = 4;
 config.agents.defaults.subagents = config.agents.defaults.subagents || {};
 config.agents.defaults.subagents.maxConcurrent = 8;
-config.agents.defaults.subagents.thinking = 'low';
+config.agents.defaults.subagents.thinking = 'medium';
+config.agents.defaults.subagents.allowedTools = ['exec', 'read', 'write', 'edit', 'web_search', 'web_fetch', 'browser'];
 
-// 6. Timezone for Vietnamese users
+// 6. Agentic mode — self-correction, planning, tool orchestration
+config.agents.defaults.agenticMode = true;
+config.agents.defaults.planningDepth = 'deep';
+config.agents.defaults.selfCorrection = true;
+config.agents.defaults.iterativeRefinement = true;
+
+// 7. Timezone for Vietnamese users
 config.agents.defaults.userTimezone = 'Asia/Ho_Chi_Minh';
 config.agents.defaults.timeFormat = '24';
 
 // Tool profile: "full" allows all tools (exec, browser, web_search, etc.)
 config.tools = config.tools || {};
 config.tools.profile = 'full';
+
+// Session visibility: allow dashboard to read all sessions
+config.tools.sessions = config.tools.sessions || {};
+config.tools.sessions.visibility = 'all';
 
 // Browser: enable with headless mode for container environment
 // Set executablePath explicitly — xdg-settings default-browser detection won't work headless
