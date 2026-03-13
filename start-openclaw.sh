@@ -307,20 +307,13 @@ config.agents.defaults.compaction.memoryFlush = {
     forceFlushTranscriptBytes: '2mb',
 };
 
-// 5. Concurrency — allow parallel agent work (agent teams)
+// 5. Concurrency — allow parallel agent work
 config.agents.defaults.maxConcurrent = 4;
 config.agents.defaults.subagents = config.agents.defaults.subagents || {};
 config.agents.defaults.subagents.maxConcurrent = 8;
 config.agents.defaults.subagents.thinking = 'medium';
-config.agents.defaults.subagents.allowedTools = ['exec', 'read', 'write', 'edit', 'web_search', 'web_fetch', 'browser'];
 
-// 6. Agentic mode — self-correction, planning, tool orchestration
-config.agents.defaults.agenticMode = true;
-config.agents.defaults.planningDepth = 'deep';
-config.agents.defaults.selfCorrection = true;
-config.agents.defaults.iterativeRefinement = true;
-
-// 7. Timezone for Vietnamese users
+// 6. Timezone for Vietnamese users
 config.agents.defaults.userTimezone = 'Asia/Ho_Chi_Minh';
 config.agents.defaults.timeFormat = '24';
 
