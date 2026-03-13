@@ -295,7 +295,6 @@ if (!config.agents.list.some(a => a.id === 'seo-gap-analyzer')) {
 config.bindings = config.bindings || [];
 if (!config.bindings.some(b => b.agentId === 'seo-gap-analyzer' && b.match?.channel === 'telegram')) {
     config.bindings.push({
-        type: 'route',
         agentId: 'seo-gap-analyzer',
         comment: 'Route all Telegram messages to SEO Gap Analyzer',
         match: { channel: 'telegram' },
