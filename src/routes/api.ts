@@ -842,6 +842,7 @@ adminApi.put('/agents/:id/files/:name', async (c) => {
 // =============================================================================
 
 // POST /api/admin/exec - Execute a shell command in the sandbox container
+// Note: does NOT require the gateway to be running — useful for recovery/diagnostics
 adminApi.post('/exec', async (c) => {
   const sandbox = c.get('sandbox');
 
@@ -850,8 +851,6 @@ adminApi.post('/exec', async (c) => {
     if (!body.command?.trim()) {
       return c.json({ ok: false, error: 'command is required' }, 400);
     }
-
-    await ensureMoltbotGateway(sandbox, c.env);
 
     // Build the command, optionally cd to cwd first
     const cmd = body.cwd

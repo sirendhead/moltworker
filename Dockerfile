@@ -66,6 +66,11 @@ RUN chmod +x /usr/local/bin/start-openclaw.sh
 # Copy custom skills
 COPY skills/ /root/clawd/skills/
 
+# Copy local MCP server (for direct stdio access from Claude Desktop/Code)
+COPY mcp-server/server.js /root/openclaw-mcp/server.js
+COPY mcp-server/setup.sh /root/openclaw-mcp/setup.sh
+RUN chmod +x /root/openclaw-mcp/setup.sh
+
 # Set working directory
 WORKDIR /root/clawd
 
