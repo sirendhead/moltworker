@@ -291,6 +291,18 @@ if (!config.agents.list.some(a => a.id === 'seo-gap-analyzer')) {
     console.log('Added SEO Gap Analyzer agent');
 }
 
+// Bind SEO Gap Analyzer to Telegram channel (all Telegram DMs → SEO agent)
+config.bindings = config.bindings || [];
+if (!config.bindings.some(b => b.agentId === 'seo-gap-analyzer' && b.match?.channel === 'telegram')) {
+    config.bindings.push({
+        type: 'route',
+        agentId: 'seo-gap-analyzer',
+        comment: 'Route all Telegram messages to SEO Gap Analyzer',
+        match: { channel: 'telegram' },
+    });
+    console.log('Bound SEO Gap Analyzer to Telegram channel');
+}
+
 // Web search: store Brave API key in config if env var is set
 if (process.env.BRAVE_API_KEY) {
     config.tools = config.tools || {};
