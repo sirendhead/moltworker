@@ -8,7 +8,7 @@
 #
 # Options:
 #   (no flags)         Fetch + audit only. Shows risk report, does NOT merge.
-#   --approve          Merge origin/main into local (ff-only). Requires audit first.
+#   --approve          Merge upstream/main into local (ff-only). Push to fork.
 #   --bump             Update Dockerfile openclaw version to latest stable tag.
 #   --tag=vX.Y.Z       Target a specific tag instead of latest (for --bump).
 #   --report=FILE      Write audit report to file (default: stdout + /tmp/openclaw-audit.md)
@@ -73,11 +73,11 @@ echo ""
 info "Repo: $OPENCLAW_DIR"
 info "Current HEAD: $(git log --oneline -1)"
 
-git fetch origin --tags --quiet 2>/dev/null
+git fetch upstream --tags --quiet 2>/dev/null
 
 LOCAL_HEAD=$(git rev-parse HEAD)
-REMOTE_HEAD=$(git rev-parse origin/main)
-BEHIND=$(git rev-list --count HEAD..origin/main)
+REMOTE_HEAD=$(git rev-parse upstream/main)
+BEHIND=$(git rev-list --count HEAD..upstream/main)
 
 CURRENT_DOCKER_VER=$(grep -o 'openclaw@[0-9.]*' "$DOCKERFILE" 2>/dev/null | head -1 | sed 's/openclaw@//')
 LATEST_TAG=$(git tag --sort=-version:refname | grep -E '^v20[0-9]{2}\.[0-9]+\.[0-9]+$' | head -1)
@@ -86,7 +86,7 @@ LATEST_VER="${LATEST_TAG#v}"
 echo ""
 echo -e "${BOLD}Versions:${NC}"
 echo "  Local HEAD:        $(git rev-parse --short HEAD)"
-echo "  Remote HEAD:       $(git rev-parse --short origin/main)"
+echo "  Remote HEAD:       $(git rev-parse --short upstream/main)"
 echo "  Commits behind:    $BEHIND"
 echo "  Latest stable tag: $LATEST_TAG"
 echo "  Dockerfile:        openclaw@$CURRENT_DOCKER_VER"
@@ -110,7 +110,7 @@ if [ "$BEHIND" -gt 0 ] && [ "$DO_BUMP" = false ]; then
   echo ""
   echo -e "${BOLD}=== Risk Audit ($BEHIND commits) ===${NC}"
 
-  RANGE="HEAD..origin/main"
+  RANGE="HEAD..upstream/main"
 
   # Collect all changed files
   CHANGED_FILES=$(git diff --name-only $RANGE)
@@ -204,7 +204,7 @@ if [ "$BEHIND" -gt 0 ] && [ "$DO_BUMP" = false ]; then
   {
     echo "# OpenClaw Audit Report"
     echo "Generated: $(date -Iseconds)"
-    echo "Range: $(git rev-parse --short HEAD)..$(git rev-parse --short origin/main) ($BEHIND commits)"
+    echo "Range: $(git rev-parse --short HEAD)..$(git rev-parse --short upstream/main) ($BEHIND commits)"
     echo "Current Dockerfile: openclaw@$CURRENT_DOCKER_VER"
     echo "Latest tag: $LATEST_TAG"
     echo ""
@@ -241,11 +241,22 @@ if [ "$DO_APPROVE" = true ] && [ "$BEHIND" -gt 0 ]; then
   echo -e "${BOLD}=== Merging upstream (ff-only) ===${NC}"
 
   # Safety: only fast-forward, never create merge commits
-  if git merge --ff-only origin/main; then
+  if git merge --ff-only upstream/main; then
     ok "Merged $BEHIND commits. Now at: $(git log --oneline -1)"
+
+    # Push to fork (origin = sirendhead/clawdbot)
+    info "Pushing to fork (origin)..."
+    if git push origin main; then
+      ok "Fork synced: origin/main updated"
+    else
+      warn "Push to fork failed — may need manual push: git push origin main"
+    fi
   else
     danger "Fast-forward merge failed! You may have local commits."
-    echo "  Resolve manually: cd $OPENCLAW_DIR && git log --oneline origin/main..HEAD"
+    echo "  If you have custom patches, rebase them:"
+    echo "    git rebase upstream/main"
+    echo "  Or check divergence:"
+    echo "    git log --oneline upstream/main..HEAD"
     exit 1
   fi
 fi
