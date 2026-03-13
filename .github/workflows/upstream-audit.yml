@@ -1,0 +1,229 @@
+name: OpenClaw Upstream Audit
+
+# Runs daily at 8:00 AM Vietnam time (01:00 UTC)
+# Creates a GitHub issue when upstream has new releases with risk assessment
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch: # manual trigger
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout moltworker
+        uses: actions/checkout@v4
+
+      - name: Get current Dockerfile version
+        id: current
+        run: |
+          VER=$(grep -o 'openclaw@[0-9.]*' Dockerfile | head -1 | sed 's/openclaw@//')
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Current Dockerfile version: $VER"
+
+      - name: Fetch upstream tags
+        id: upstream
+        run: |
+          # Fetch only tags from upstream (lightweight, no full clone needed)
+          git ls-remote --tags https://github.com/openclaw/openclaw.git \
+            | grep -oE 'refs/tags/v20[0-9]{2}\.[0-9]+\.[0-9]+$' \
+            | sed 's|refs/tags/||' \
+            | sort -V \
+            > /tmp/all-tags.txt
+
+          LATEST=$(tail -1 /tmp/all-tags.txt)
+          echo "latest_tag=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "latest_ver=${LATEST#v}" >> "$GITHUB_OUTPUT"
+          echo "Latest upstream tag: $LATEST"
+
+          # Count new tags since current version
+          CURRENT="${{ steps.current.outputs.version }}"
+          NEW_TAGS=$(awk -v cur="v$CURRENT" 'found { print } $0 == cur { found=1 }' /tmp/all-tags.txt | wc -l)
+          echo "new_tags=$NEW_TAGS" >> "$GITHUB_OUTPUT"
+          echo "New tags since v$CURRENT: $NEW_TAGS"
+
+      - name: Check if update needed
+        id: check
+        run: |
+          CURRENT="${{ steps.current.outputs.version }}"
+          LATEST="${{ steps.upstream.outputs.latest_ver }}"
+          if [ "$CURRENT" = "$LATEST" ]; then
+            echo "needs_update=false" >> "$GITHUB_OUTPUT"
+            echo "Already up to date: $CURRENT"
+          else
+            echo "needs_update=true" >> "$GITHUB_OUTPUT"
+            echo "Update available: $CURRENT -> $LATEST"
+          fi
+
+      - name: Fetch upstream changelog
+        if: steps.check.outputs.needs_update == 'true'
+        id: changelog
+        run: |
+          # Clone upstream (shallow, just enough for changelog)
+          git clone --depth=200 --single-branch --branch main \
+            https://github.com/openclaw/openclaw.git /tmp/openclaw 2>/dev/null
+
+          cd /tmp/openclaw
+          CURRENT="v${{ steps.current.outputs.version }}"
+          LATEST="${{ steps.upstream.outputs.latest_tag }}"
+
+          # Get commits between versions (if tags exist in shallow clone)
+          {
+            echo "## Commits ($CURRENT → $LATEST)"
+            echo ""
+            if git rev-parse "$CURRENT" >/dev/null 2>&1; then
+              git log --oneline "$CURRENT..$LATEST" 2>/dev/null | head -50
+            else
+              echo "(tag $CURRENT not in shallow clone — showing recent commits)"
+              git log --oneline -50
+            fi
+          } > /tmp/changelog.txt
+
+          # Risk scan on changed files
+          {
+            echo ""
+            echo "## Risk Assessment"
+            echo ""
+
+            if git rev-parse "$CURRENT" >/dev/null 2>&1; then
+              FILES=$(git diff --name-only "$CURRENT..$LATEST" 2>/dev/null)
+            else
+              FILES=$(git diff --name-only HEAD~50 2>/dev/null)
+            fi
+
+            # Breaking
+            BREAKING=$(echo "$FILES" | grep -E 'zod-schema|config/types' || true)
+            if [ -n "$BREAKING" ]; then
+              echo "### :rotating_light: BREAKING — Config Schema"
+              echo '```'
+              echo "$BREAKING"
+              echo '```'
+              echo ""
+            fi
+
+            # Security
+            SECURITY=$(echo "$FILES" | grep -iE 'auth|jwt|secret|pairing|security|token' || true)
+            if [ -n "$SECURITY" ]; then
+              echo "### :shield: SECURITY"
+              echo '```'
+              echo "$SECURITY"
+              echo '```'
+              echo ""
+            fi
+
+            # Channel (Telegram/Discord/Slack)
+            CHANNEL=$(echo "$FILES" | grep -iE 'telegram|discord|slack' || true)
+            if [ -n "$CHANNEL" ]; then
+              echo "### :speech_balloon: CHANNEL — Bot Integration"
+              echo '```'
+              echo "$CHANNEL"
+              echo '```'
+              echo ""
+            fi
+
+            # Agent/Routing
+            AGENT=$(echo "$FILES" | grep -iE 'agent|routing|binding' || true)
+            if [ -n "$AGENT" ]; then
+              echo "### :robot: AGENT — Routing/Bindings"
+              echo '```'
+              echo "$AGENT" | head -20
+              echo '```'
+              echo ""
+            fi
+
+            # Deps
+            DEPS=$(echo "$FILES" | grep -E 'package\.json|pnpm-lock' || true)
+            if [ -n "$DEPS" ]; then
+              echo "### :package: DEPS — Dependencies"
+              echo '```'
+              echo "$DEPS"
+              echo '```'
+              echo ""
+            fi
+
+            # Summary
+            TOTAL=$(echo "$FILES" | wc -l)
+            B_COUNT=$(echo "$FILES" | grep -cE 'zod-schema|config/types' 2>/dev/null || echo 0)
+            S_COUNT=$(echo "$FILES" | grep -ciE 'auth|jwt|secret|security' 2>/dev/null || echo 0)
+            echo "### Summary"
+            echo "- Total files changed: $TOTAL"
+            echo "- Breaking risk: $B_COUNT files"
+            echo "- Security risk: $S_COUNT files"
+            echo "- New releases: ${{ steps.upstream.outputs.new_tags }}"
+          } >> /tmp/changelog.txt
+
+          # Output for issue body (escape for GH Actions)
+          {
+            cat /tmp/changelog.txt
+            echo ""
+            echo "---"
+            echo ""
+            echo "## Actions"
+            echo "After reviewing, run locally:"
+            echo '```bash'
+            echo "cd F:\\vibe-coding\\moltworker"
+            echo "bash scripts/sync-openclaw.sh          # re-audit locally"
+            echo "bash scripts/sync-openclaw.sh --approve # merge upstream"
+            echo "bash scripts/sync-openclaw.sh --bump    # update Dockerfile"
+            echo "git add Dockerfile && git commit -m 'chore: bump openclaw to $LATEST'"
+            echo "npx wrangler deploy"
+            echo '```'
+          } > /tmp/issue-body.txt
+
+          # Determine risk level for label
+          if [ "$B_COUNT" -gt 0 ]; then
+            echo "risk=high" >> "$GITHUB_OUTPUT"
+          elif [ "$S_COUNT" -gt 0 ]; then
+            echo "risk=medium" >> "$GITHUB_OUTPUT"
+          else
+            echo "risk=low" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for existing open issue
+        if: steps.check.outputs.needs_update == 'true'
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Close stale audit issues for older versions
+          OPEN=$(gh issue list --label "upstream-audit" --state open --json number,title -q '.[].number')
+          if [ -n "$OPEN" ]; then
+            echo "has_existing=true" >> "$GITHUB_OUTPUT"
+            echo "existing_issues=$OPEN" >> "$GITHUB_OUTPUT"
+            echo "Found existing audit issues: $OPEN"
+          else
+            echo "has_existing=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Close stale audit issues
+        if: steps.check.outputs.needs_update == 'true' && steps.existing.outputs.has_existing == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST="${{ steps.upstream.outputs.latest_tag }}"
+          for num in ${{ steps.existing.outputs.existing_issues }}; do
+            gh issue close "$num" -c "Superseded by newer audit for $LATEST"
+          done
+
+      - name: Create audit issue
+        if: steps.check.outputs.needs_update == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CURRENT="v${{ steps.current.outputs.version }}"
+          LATEST="${{ steps.upstream.outputs.latest_tag }}"
+          RISK="${{ steps.changelog.outputs.risk }}"
+
+          TITLE="[Upstream Audit] OpenClaw $CURRENT → $LATEST"
+          [ "$RISK" = "high" ] && TITLE="🔴 $TITLE (HIGH RISK)"
+          [ "$RISK" = "medium" ] && TITLE="🟡 $TITLE (medium risk)"
+          [ "$RISK" = "low" ] && TITLE="🟢 $TITLE (low risk)"
+
+          gh issue create \
+            --title "$TITLE" \
+            --body-file /tmp/issue-body.txt \
+            --label "upstream-audit"
