@@ -446,4 +446,33 @@ app.all('*', async (c) => {
 
 export default {
   fetch: app.fetch,
+
+  /**
+   * Cron heartbeat — runs every 5 minutes to keep the Durable Object and container alive.
+   *
+   * Without periodic activity, Cloudflare evicts the Durable Object after inactivity.
+   * When the DO is evicted, the container reference is lost and the platform may stop
+   * the container. The next request triggers a full cold start (~2 minutes).
+   *
+   * This handler makes a lightweight call to the sandbox (listProcesses only),
+   * which is enough to keep the DO alive and the container warm without competing
+   * with user requests for sandbox resources.
+   */
+  async scheduled(
+    _controller: ScheduledController,
+    env: MoltbotEnv,
+    _ctx: ExecutionContext,
+  ) {
+    const options = buildSandboxOptions(env);
+    const sandbox = getSandbox(env.Sandbox, 'moltbot', options);
+
+    try {
+      // Just list processes — lightweight DO touch to keep it alive.
+      // Don't call waitForPort or exec to avoid competing with user requests.
+      const process = await findExistingMoltbotProcess(sandbox);
+      console.log('[HEARTBEAT]', process ? `gateway ${process.status}` : 'no gateway process');
+    } catch (e) {
+      console.error('[HEARTBEAT] Error:', e instanceof Error ? e.message : e);
+    }
+  },
 };

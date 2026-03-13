@@ -14,6 +14,11 @@
   "observability": {
     "enabled": true,
   },
+  // Heartbeat cron: pings the sandbox every 5 minutes to prevent container eviction.
+  // Using a lighter schedule to avoid DO contention with user requests.
+  "triggers": {
+    "crons": ["*/5 * * * *"],
+  },
   // Static assets for admin UI (built by vite)
   "assets": {
     "directory": "./dist/client",

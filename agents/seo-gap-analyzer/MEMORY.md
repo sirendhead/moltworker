@@ -1,0 +1,1 @@
+# SEO Gap Analyzer Memory

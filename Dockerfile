@@ -66,6 +66,9 @@ RUN chmod +x /usr/local/bin/start-openclaw.sh
 # Copy custom skills
 COPY skills/ /root/clawd/skills/
 
+# Copy agent workspaces (soul.md, tools.md, MEMORY.md for each agent)
+COPY agents/ /root/clawd/agents/
+
 # Copy local MCP server (for direct stdio access from Claude Desktop/Code)
 COPY mcp-server/server.js /root/openclaw-mcp/server.js
 COPY mcp-server/setup.sh /root/openclaw-mcp/setup.sh

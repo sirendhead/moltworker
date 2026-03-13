@@ -278,6 +278,19 @@ config.browser.headless = true;
 config.browser.noSandbox = true;
 config.browser.executablePath = '/usr/bin/google-chrome-stable';
 
+// Ensure SEO Gap Analyzer agent exists
+config.agents = config.agents || {};
+config.agents.list = config.agents.list || [];
+if (!config.agents.list.some(a => a.id === 'seo-gap-analyzer')) {
+    config.agents.list.push({
+        id: 'seo-gap-analyzer',
+        name: 'SEO Gap Analyzer',
+        workspace: '/root/clawd/agents/seo-gap-analyzer',
+        identity: { emoji: '🔍' },
+    });
+    console.log('Added SEO Gap Analyzer agent');
+}
+
 // Web search: store Brave API key in config if env var is set
 if (process.env.BRAVE_API_KEY) {
     config.tools = config.tools || {};

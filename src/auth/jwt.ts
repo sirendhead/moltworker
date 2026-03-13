@@ -24,11 +24,19 @@ export async function verifyAccessJWT(
   // Create JWKS from the team domain
   const JWKS = createRemoteJWKSet(new URL(`${issuer}/cdn-cgi/access/certs`));
 
-  // Verify the JWT using jose
-  const { payload } = await jwtVerify(token, JWKS, {
+  // Add a timeout to prevent indefinite hangs if the JWKS endpoint is unreachable.
+  // Without this, a network issue between the Worker and CF Access causes ALL
+  // authenticated requests to hang forever.
+  const verifyPromise = jwtVerify(token, JWKS, {
     issuer,
     audience: expectedAud,
   });
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('JWT verification timed out (10s)')), 10_000);
+  });
+
+  const { payload } = await Promise.race([verifyPromise, timeoutPromise]);
 
   // Cast to our JWTPayload type
   return payload as unknown as JWTPayload;
