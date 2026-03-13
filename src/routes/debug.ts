@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types';
-import { findExistingMoltbotProcess, waitForProcess } from '../gateway';
+import { findExistingMoltbotProcess, waitForProcess, backupToR2, restoreFromR2 } from '../gateway';
 
 /**
  * Debug routes for inspecting container state
@@ -383,6 +383,51 @@ debug.get('/container-config', async (c) => {
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return c.json({ error: errorMessage }, 500);
+  }
+});
+
+// POST /debug/r2-backup - Manually trigger R2 backup
+debug.post('/r2-backup', async (c) => {
+  const sandbox = c.get('sandbox');
+  const bucket = c.env.MOLTBOT_BUCKET;
+
+  if (!bucket) {
+    return c.json({ error: 'MOLTBOT_BUCKET not configured' }, 500);
+  }
+
+  try {
+    const result = await backupToR2(sandbox, bucket);
+    return c.json({ ok: true, ...result });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return c.json({ error: msg }, 500);
+  }
+});
+
+// GET /debug/r2-list - List R2 objects
+debug.get('/r2-list', async (c) => {
+  const bucket = c.env.MOLTBOT_BUCKET;
+  const prefix = c.req.query('prefix') ?? '';
+
+  if (!bucket) {
+    return c.json({ error: 'MOLTBOT_BUCKET not configured' }, 500);
+  }
+
+  try {
+    const listed = await bucket.list({ prefix, limit: 100 });
+    return c.json({
+      prefix,
+      count: listed.objects.length,
+      truncated: listed.truncated,
+      objects: listed.objects.map((o) => ({
+        key: o.key,
+        size: o.size,
+        uploaded: o.uploaded?.toISOString(),
+      })),
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return c.json({ error: msg }, 500);
   }
 });
 

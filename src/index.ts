@@ -26,7 +26,7 @@ import { getSandbox, Sandbox, type SandboxOptions } from '@cloudflare/sandbox';
 import type { AppEnv, MoltbotEnv } from './types';
 import { MOLTBOT_PORT } from './config';
 import { createAccessMiddleware } from './auth';
-import { ensureMoltbotGateway, findExistingMoltbotProcess } from './gateway';
+import { ensureMoltbotGateway, findExistingMoltbotProcess, backupToR2 } from './gateway';
 import { publicRoutes, api, adminUi, debug, cdp } from './routes';
 import { redactSensitiveParams } from './utils/logging';
 import loadingPageHtml from './assets/loading.html';
@@ -468,9 +468,17 @@ export default {
 
     try {
       // Just list processes — lightweight DO touch to keep it alive.
-      // Don't call waitForPort or exec to avoid competing with user requests.
       const process = await findExistingMoltbotProcess(sandbox);
       console.log('[HEARTBEAT]', process ? `gateway ${process.status}` : 'no gateway process');
+
+      // Backup config/sessions to R2 if gateway is running
+      if (process && process.status === 'running' && env.MOLTBOT_BUCKET) {
+        const result = await backupToR2(sandbox, env.MOLTBOT_BUCKET);
+        console.log(`[HEARTBEAT] R2 backup: ${result.backed} files, ${result.errors.length} errors`);
+        if (result.errors.length > 0) {
+          console.warn('[HEARTBEAT] Backup errors:', result.errors.slice(0, 5).join('; '));
+        }
+      }
     } catch (e) {
       console.error('[HEARTBEAT] Error:', e instanceof Error ? e.message : e);
     }
