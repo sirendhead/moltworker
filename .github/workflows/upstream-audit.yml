@@ -2,6 +2,8 @@ name: OpenClaw Upstream Audit
 
 # Runs daily at 8:00 AM Vietnam time (01:00 UTC)
 # Creates a GitHub issue when upstream has new releases with risk assessment
+# LOW risk issues are auto-assigned to Copilot agent for automatic PR
+# MEDIUM/HIGH risk issues require manual review before proceeding
 on:
   schedule:
     - cron: '0 1 * * *'
@@ -28,7 +30,6 @@ jobs:
       - name: Fetch upstream tags
         id: upstream
         run: |
-          # Fetch only tags from upstream (lightweight, no full clone needed)
           git ls-remote --tags https://github.com/openclaw/openclaw.git \
             | grep -oE 'refs/tags/v20[0-9]{2}\.[0-9]+\.[0-9]+$' \
             | sed 's|refs/tags/||' \
@@ -40,11 +41,9 @@ jobs:
           echo "latest_ver=${LATEST#v}" >> "$GITHUB_OUTPUT"
           echo "Latest upstream tag: $LATEST"
 
-          # Count new tags since current version
           CURRENT="${{ steps.current.outputs.version }}"
           NEW_TAGS=$(awk -v cur="v$CURRENT" 'found { print } $0 == cur { found=1 }' /tmp/all-tags.txt | wc -l)
           echo "new_tags=$NEW_TAGS" >> "$GITHUB_OUTPUT"
-          echo "New tags since v$CURRENT: $NEW_TAGS"
 
       - name: Check if update needed
         id: check
@@ -59,11 +58,10 @@ jobs:
             echo "Update available: $CURRENT -> $LATEST"
           fi
 
-      - name: Fetch upstream changelog
+      - name: Fetch upstream changelog and assess risk
         if: steps.check.outputs.needs_update == 'true'
         id: changelog
         run: |
-          # Clone upstream (shallow, just enough for changelog)
           git clone --depth=200 --single-branch --branch main \
             https://github.com/openclaw/openclaw.git /tmp/openclaw 2>/dev/null
 
@@ -71,7 +69,7 @@ jobs:
           CURRENT="v${{ steps.current.outputs.version }}"
           LATEST="${{ steps.upstream.outputs.latest_tag }}"
 
-          # Get commits between versions (if tags exist in shallow clone)
+          # Commits
           {
             echo "## Commits ($CURRENT → $LATEST)"
             echo ""
@@ -83,19 +81,18 @@ jobs:
             fi
           } > /tmp/changelog.txt
 
-          # Risk scan on changed files
+          # Risk scan
+          if git rev-parse "$CURRENT" >/dev/null 2>&1; then
+            FILES=$(git diff --name-only "$CURRENT..$LATEST" 2>/dev/null)
+          else
+            FILES=$(git diff --name-only HEAD~50 2>/dev/null)
+          fi
+
           {
             echo ""
             echo "## Risk Assessment"
             echo ""
 
-            if git rev-parse "$CURRENT" >/dev/null 2>&1; then
-              FILES=$(git diff --name-only "$CURRENT..$LATEST" 2>/dev/null)
-            else
-              FILES=$(git diff --name-only HEAD~50 2>/dev/null)
-            fi
-
-            # Breaking
             BREAKING=$(echo "$FILES" | grep -E 'zod-schema|config/types' || true)
             if [ -n "$BREAKING" ]; then
               echo "### :rotating_light: BREAKING — Config Schema"
@@ -105,7 +102,6 @@ jobs:
               echo ""
             fi
 
-            # Security
             SECURITY=$(echo "$FILES" | grep -iE 'auth|jwt|secret|pairing|security|token' || true)
             if [ -n "$SECURITY" ]; then
               echo "### :shield: SECURITY"
@@ -115,7 +111,6 @@ jobs:
               echo ""
             fi
 
-            # Channel (Telegram/Discord/Slack)
             CHANNEL=$(echo "$FILES" | grep -iE 'telegram|discord|slack' || true)
             if [ -n "$CHANNEL" ]; then
               echo "### :speech_balloon: CHANNEL — Bot Integration"
@@ -125,7 +120,6 @@ jobs:
               echo ""
             fi
 
-            # Agent/Routing
             AGENT=$(echo "$FILES" | grep -iE 'agent|routing|binding' || true)
             if [ -n "$AGENT" ]; then
               echo "### :robot: AGENT — Routing/Bindings"
@@ -135,7 +129,6 @@ jobs:
               echo ""
             fi
 
-            # Deps
             DEPS=$(echo "$FILES" | grep -E 'package\.json|pnpm-lock' || true)
             if [ -n "$DEPS" ]; then
               echo "### :package: DEPS — Dependencies"
@@ -145,7 +138,6 @@ jobs:
               echo ""
             fi
 
-            # Summary
             TOTAL=$(echo "$FILES" | wc -l)
             B_COUNT=$(echo "$FILES" | grep -cE 'zod-schema|config/types' 2>/dev/null || echo 0)
             S_COUNT=$(echo "$FILES" | grep -ciE 'auth|jwt|secret|security' 2>/dev/null || echo 0)
@@ -156,25 +148,7 @@ jobs:
             echo "- New releases: ${{ steps.upstream.outputs.new_tags }}"
           } >> /tmp/changelog.txt
 
-          # Output for issue body (escape for GH Actions)
-          {
-            cat /tmp/changelog.txt
-            echo ""
-            echo "---"
-            echo ""
-            echo "## Actions"
-            echo "After reviewing, run locally:"
-            echo '```bash'
-            echo "cd F:\\vibe-coding\\moltworker"
-            echo "bash scripts/sync-openclaw.sh          # re-audit locally"
-            echo "bash scripts/sync-openclaw.sh --approve # merge upstream"
-            echo "bash scripts/sync-openclaw.sh --bump    # update Dockerfile"
-            echo "git add Dockerfile && git commit -m 'chore: bump openclaw to $LATEST'"
-            echo "npx wrangler deploy"
-            echo '```'
-          } > /tmp/issue-body.txt
-
-          # Determine risk level for label
+          # Determine risk level
           if [ "$B_COUNT" -gt 0 ]; then
             echo "risk=high" >> "$GITHUB_OUTPUT"
           elif [ "$S_COUNT" -gt 0 ]; then
@@ -183,29 +157,74 @@ jobs:
             echo "risk=low" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check for existing open issue
-        if: steps.check.outputs.needs_update == 'true'
-        id: existing
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Close stale audit issues for older versions
-          OPEN=$(gh issue list --label "upstream-audit" --state open --json number,title -q '.[].number')
-          if [ -n "$OPEN" ]; then
-            echo "has_existing=true" >> "$GITHUB_OUTPUT"
-            echo "existing_issues=$OPEN" >> "$GITHUB_OUTPUT"
-            echo "Found existing audit issues: $OPEN"
-          else
-            echo "has_existing=false" >> "$GITHUB_OUTPUT"
-          fi
+          # Build issue body with instructions for Copilot agent
+          RISK_LEVEL="low"
+          [ "$B_COUNT" -gt 0 ] && RISK_LEVEL="high"
+          [ "$S_COUNT" -gt 0 ] && [ "$B_COUNT" -eq 0 ] && RISK_LEVEL="medium"
+
+          {
+            cat /tmp/changelog.txt
+            echo ""
+            echo "---"
+            echo ""
+
+            if [ "$RISK_LEVEL" = "low" ]; then
+              echo "## Task for Copilot"
+              echo ""
+              echo "This is a **low-risk** upstream version bump. Please create a PR that:"
+              echo ""
+              echo "1. In \`Dockerfile\`, change \`openclaw@${{ steps.current.outputs.version }}\` to \`openclaw@${LATEST#v}\`"
+              echo "2. In \`Dockerfile\`, update the cache bust comment to include the new version"
+              echo "3. Do NOT change any other files"
+              echo "4. PR title: \`chore: bump openclaw to $LATEST\`"
+              echo "5. PR body should include the risk summary from this issue"
+              echo ""
+              echo "The only file to modify is \`Dockerfile\`. This is a single-line version bump."
+            elif [ "$RISK_LEVEL" = "medium" ]; then
+              echo "## :warning: Manual Review Required"
+              echo ""
+              echo "This update has **security-related changes**. A human must review before proceeding."
+              echo ""
+              echo "### If safe after review, Copilot can proceed:"
+              echo "1. In \`Dockerfile\`, change \`openclaw@${{ steps.current.outputs.version }}\` to \`openclaw@${LATEST#v}\`"
+              echo "2. In \`Dockerfile\`, update the cache bust comment to include the new version"
+              echo "3. Do NOT change any other files"
+              echo "4. PR title: \`chore: bump openclaw to $LATEST\`"
+              echo ""
+              echo "### Manual steps after merge:"
+              echo '```bash'
+              echo "cd F:\\vibe-coding\\moltworker"
+              echo "bash scripts/sync-openclaw.sh          # re-audit locally"
+              echo "bash scripts/sync-openclaw.sh --approve # merge upstream to local clone"
+              echo '```'
+            else
+              echo "## :stop_sign: Manual Review Required — HIGH RISK"
+              echo ""
+              echo "This update has **breaking config/schema changes**. Do NOT auto-merge."
+              echo ""
+              echo "### Steps:"
+              echo "1. Review the BREAKING changes above carefully"
+              echo "2. Check if \`start-openclaw.sh\` config patch is still compatible"
+              echo "3. Check if agent bindings format changed"
+              echo "4. Test locally before deploying"
+              echo ""
+              echo '```bash'
+              echo "cd F:\\vibe-coding\\moltworker"
+              echo "bash scripts/sync-openclaw.sh          # full audit"
+              echo "bash scripts/sync-openclaw.sh --approve # merge after review"
+              echo "bash scripts/sync-openclaw.sh --bump --tag=$LATEST"
+              echo '```'
+            fi
+          } > /tmp/issue-body.txt
 
       - name: Close stale audit issues
-        if: steps.check.outputs.needs_update == 'true' && steps.existing.outputs.has_existing == 'true'
+        if: steps.check.outputs.needs_update == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           LATEST="${{ steps.upstream.outputs.latest_tag }}"
-          for num in ${{ steps.existing.outputs.existing_issues }}; do
+          OPEN=$(gh issue list --label "upstream-audit" --state open --json number -q '.[].number')
+          for num in $OPEN; do
             gh issue close "$num" -c "Superseded by newer audit for $LATEST"
           done
 
@@ -223,7 +242,16 @@ jobs:
           [ "$RISK" = "medium" ] && TITLE="🟡 $TITLE (medium risk)"
           [ "$RISK" = "low" ] && TITLE="🟢 $TITLE (low risk)"
 
-          gh issue create \
-            --title "$TITLE" \
-            --body-file /tmp/issue-body.txt \
-            --label "upstream-audit"
+          # Create issue — assign to Copilot for low risk, unassigned for medium/high
+          if [ "$RISK" = "low" ]; then
+            gh issue create \
+              --title "$TITLE" \
+              --body-file /tmp/issue-body.txt \
+              --label "upstream-audit" \
+              --assignee "copilot"
+          else
+            gh issue create \
+              --title "$TITLE" \
+              --body-file /tmp/issue-body.txt \
+              --label "upstream-audit"
+          fi
