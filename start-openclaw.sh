@@ -266,6 +266,57 @@ if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
     };
 }
 
+// ── INTELLIGENCE CONFIG ──────────────────────────────────────
+// Match Claude.ai quality: thinking, model params, context management
+config.agents = config.agents || {};
+config.agents.defaults = config.agents.defaults || {};
+
+// 1. Extended Thinking — adaptive lets the model decide when to think deep
+config.agents.defaults.thinkingDefault = 'adaptive';
+
+// 2. Model parameters — optimize for quality
+config.agents.defaults.models = config.agents.defaults.models || {};
+// Anthropic model tuning (applies to any anthropic/ model)
+const anthropicModelId = Object.keys(config.models?.providers || {})
+    .filter(p => p.startsWith('cf-ai-gw-anthropic'))
+    .map(p => p + '/' + (config.models.providers[p].models?.[0]?.id || ''))
+    .find(Boolean);
+if (anthropicModelId) {
+    config.agents.defaults.models[anthropicModelId] = {
+        streaming: true,
+        params: {
+            cacheRetention: 'short',
+            maxTokens: 16000,
+        },
+    };
+    console.log('Model params configured for:', anthropicModelId);
+}
+
+// 3. Context pruning — keep conversation relevant, prune stale tool outputs
+config.agents.defaults.contextPruning = {
+    mode: 'cache-ttl',
+    ttl: '1h',
+    keepLastAssistants: 3,
+};
+
+// 4. Compaction — smart summarization when context gets long
+config.agents.defaults.compaction = config.agents.defaults.compaction || {};
+config.agents.defaults.compaction.mode = 'safeguard';
+config.agents.defaults.compaction.memoryFlush = {
+    enabled: true,
+    forceFlushTranscriptBytes: '2mb',
+};
+
+// 5. Concurrency — allow parallel agent work
+config.agents.defaults.maxConcurrent = 4;
+config.agents.defaults.subagents = config.agents.defaults.subagents || {};
+config.agents.defaults.subagents.maxConcurrent = 8;
+config.agents.defaults.subagents.thinking = 'low';
+
+// 6. Timezone for Vietnamese users
+config.agents.defaults.userTimezone = 'Asia/Ho_Chi_Minh';
+config.agents.defaults.timeFormat = '24';
+
 // Tool profile: "full" allows all tools (exec, browser, web_search, etc.)
 config.tools = config.tools || {};
 config.tools.profile = 'full';
