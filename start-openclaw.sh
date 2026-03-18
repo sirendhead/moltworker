@@ -246,6 +246,9 @@ config.agents.defaults.maxConcurrent = 4;
 config.agents.defaults.subagents = config.agents.defaults.subagents || {};
 config.agents.defaults.subagents.maxConcurrent = 8;
 config.agents.defaults.subagents.thinking = 'medium';
+config.agents.defaults.subagents.maxSpawnDepth = 2;          // Enable orchestrator pattern (main → orchestrator → workers)
+config.agents.defaults.subagents.maxChildrenPerAgent = 5;    // Max 5 parallel sub-agents per parent
+config.agents.defaults.subagents.runTimeoutSeconds = 900;    // 15 min timeout per sub-agent run
 
 // 6. Timezone for Vietnamese users
 config.agents.defaults.userTimezone = 'Asia/Ho_Chi_Minh';
