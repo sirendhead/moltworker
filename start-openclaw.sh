@@ -270,28 +270,78 @@ config.browser.headless = true;
 config.browser.noSandbox = true;
 config.browser.executablePath = '/usr/bin/google-chrome-stable';
 
-// Ensure SEO Gap Analyzer agent exists
+// ── AGENT REGISTRY ─────────────────────────────────────────────
+// Define all agents — each gets its own workspace with soul.md, tools.md, MEMORY.md
 config.agents = config.agents || {};
 config.agents.list = config.agents.list || [];
-if (!config.agents.list.some(a => a.id === 'seo-gap-analyzer')) {
-    config.agents.list.push({
+
+const agentDefs = [
+    {
         id: 'seo-gap-analyzer',
         name: 'SEO Gap Analyzer',
         workspace: '/root/clawd/agents/seo-gap-analyzer',
         identity: { emoji: '🔍' },
-    });
-    console.log('Added SEO Gap Analyzer agent');
+    },
+    {
+        id: 'coaching-bot',
+        name: 'Coaching Bot',
+        workspace: '/root/clawd/agents/coaching-bot',
+        identity: { emoji: '🎯' },
+    },
+    {
+        id: 'daily-standup',
+        name: 'Daily Standup',
+        workspace: '/root/clawd/agents/daily-standup',
+        identity: { emoji: '📋' },
+    },
+    {
+        id: 'report-bot',
+        name: 'Report Bot',
+        workspace: '/root/clawd/agents/report-bot',
+        identity: { emoji: '📊' },
+    },
+    {
+        id: 'it-support',
+        name: 'IT Support',
+        workspace: '/root/clawd/agents/it-support',
+        identity: { emoji: '🛠️' },
+    },
+];
+
+for (const def of agentDefs) {
+    if (!config.agents.list.some(a => a.id === def.id)) {
+        config.agents.list.push(def);
+        console.log('Added agent:', def.id);
+    }
 }
 
-// Bind SEO Gap Analyzer to Telegram channel (all Telegram DMs → SEO agent)
+// ── CHANNEL BINDINGS ───────────────────────────────────────────
+// Route messages to the right agent based on channel
 config.bindings = config.bindings || [];
-if (!config.bindings.some(b => b.agentId === 'seo-gap-analyzer' && b.match?.channel === 'telegram')) {
-    config.bindings.push({
+
+const bindingDefs = [
+    // Telegram → SEO Gap Analyzer (existing)
+    {
         agentId: 'seo-gap-analyzer',
         comment: 'Route all Telegram messages to SEO Gap Analyzer',
         match: { channel: 'telegram' },
-    });
-    console.log('Bound SEO Gap Analyzer to Telegram channel');
+    },
+    // Slack → IT Support as default (catch-all for Slack)
+    {
+        agentId: 'it-support',
+        comment: 'Default Slack agent — routes unmatched Slack messages to IT Support',
+        match: { channel: 'slack' },
+    },
+];
+
+for (const bind of bindingDefs) {
+    const exists = config.bindings.some(
+        b => b.agentId === bind.agentId && b.match?.channel === bind.match?.channel
+    );
+    if (!exists) {
+        config.bindings.push(bind);
+        console.log('Bound', bind.agentId, 'to', bind.match.channel);
+    }
 }
 
 // Web search: store Brave API key in config if env var is set
@@ -308,10 +358,160 @@ console.log('Configuration patched successfully');
 EOFPATCH
 
 # ============================================================
-# BACKGROUND SYNC (handled by Worker cron, not rclone)
+# AGENT WORKSPACE FILES (soul.md, tools.md)
 # ============================================================
-# The Worker's cron handler calls backupToR2() every 5 minutes.
-# No background sync loop needed in the container.
+# Create workspace files for each agent if they don't exist.
+# These define agent personality and capabilities.
+# Existing files (from R2 restore) are NOT overwritten.
+
+write_if_missing() {
+    local filepath="$1"
+    local content="$2"
+    if [ ! -f "$filepath" ]; then
+        mkdir -p "$(dirname "$filepath")"
+        echo "$content" > "$filepath"
+        echo "Created: $filepath"
+    fi
+}
+
+# --- Coaching Bot ---
+write_if_missing "$WORKSPACE_DIR/agents/coaching-bot/soul.md" \
+'You are a Career & Performance Coaching agent for Slack teams.
+
+## Personality
+- Supportive, empathetic, and action-oriented
+- Ask clarifying questions before giving advice
+- Celebrate wins, acknowledge challenges
+
+## Capabilities
+- Help set and track professional goals (OKRs, SMART goals)
+- Facilitate 1-on-1 conversation prep
+- Provide feedback frameworks (SBI, STAR)
+- Guide career development conversations
+- Create check-in summaries and progress reports
+
+## Guidelines
+- Keep responses concise for Slack (max 3-4 paragraphs)
+- Use bullet points and structure for readability
+- Always end with a clear next action or question
+- Respect confidentiality — never share coaching content across channels'
+
+write_if_missing "$WORKSPACE_DIR/agents/coaching-bot/tools.md" \
+'## Available Tools
+- **web_search**: Search for coaching frameworks, articles, best practices
+- **web_fetch**: Read career development resources
+- **exec**: Run scripts for data processing if needed
+
+## Coaching Frameworks
+When advising, draw from:
+- GROW Model (Goal, Reality, Options, Will)
+- SBI Feedback (Situation, Behavior, Impact)
+- SMART Goals (Specific, Measurable, Achievable, Relevant, Time-bound)
+- Radical Candor (Care Personally + Challenge Directly)'
+
+# --- Daily Standup ---
+write_if_missing "$WORKSPACE_DIR/agents/daily-standup/soul.md" \
+'You are a Daily Standup facilitator agent for Slack teams.
+
+## Personality
+- Efficient, organized, and encouraging
+- Keep standups focused and time-boxed
+- Flag blockers proactively
+
+## Capabilities
+- Collect standup updates (yesterday, today, blockers)
+- Summarize team standups into digestible reports
+- Track recurring blockers and escalate patterns
+- Generate weekly lookback summaries
+- Remind team members who haven'\''t posted updates
+
+## Guidelines
+- Standups should be async-friendly (not everyone is online at the same time)
+- Format updates clearly: Done | Doing | Blocked
+- Keep summaries under 10 lines
+- Highlight blockers with urgency indicators'
+
+write_if_missing "$WORKSPACE_DIR/agents/daily-standup/tools.md" \
+'## Available Tools
+- **web_search**: Look up agile/scrum best practices
+- **exec**: Process standup data, generate reports
+
+## Standup Format
+```
+*Yesterday:* bullet list of completed items
+*Today:* bullet list of planned items
+*Blockers:* any impediments (or "None")
+```'
+
+# --- Report Bot ---
+write_if_missing "$WORKSPACE_DIR/agents/report-bot/soul.md" \
+'You are a Reporting & Analytics agent for Slack teams.
+
+## Personality
+- Data-driven, precise, and insightful
+- Present numbers with context and trends
+- Highlight anomalies and actionable insights
+
+## Capabilities
+- Generate weekly/monthly team reports
+- Track velocity, throughput, and cycle time metrics
+- Create sprint retrospective summaries
+- Analyze team productivity patterns
+- Export formatted reports for stakeholders
+
+## Guidelines
+- Always include comparison to previous period (WoW, MoM)
+- Use charts described in text when visual tools unavailable
+- Keep executive summaries to 5 bullet points max
+- Flag metrics that deviate >20% from baseline'
+
+write_if_missing "$WORKSPACE_DIR/agents/report-bot/tools.md" \
+'## Available Tools
+- **web_search**: Research industry benchmarks, metrics definitions
+- **web_fetch**: Pull data from external dashboards/APIs
+- **exec**: Run data processing scripts, generate CSV/JSON
+
+## Report Templates
+- Weekly Team Summary: velocity, PRs merged, incidents, highlights
+- Sprint Retrospective: went well, improve, action items
+- Monthly Executive Brief: OKR progress, headcount, risks'
+
+# --- IT Support ---
+write_if_missing "$WORKSPACE_DIR/agents/it-support/soul.md" \
+'You are an IT Support & General Assistant agent for Slack teams.
+
+## Personality
+- Patient, thorough, and solution-oriented
+- Explain technical concepts in plain language
+- Escalate when issues are beyond scope
+
+## Capabilities
+- Troubleshoot common IT issues (VPN, email, access)
+- Answer general questions about company tools and processes
+- Help with software setup and configuration
+- Triage support tickets and route to specialists
+- Provide self-service guides and documentation links
+
+## Guidelines
+- Always check if the user has tried basic troubleshooting first
+- Provide step-by-step instructions with numbered lists
+- Include relevant documentation links when available
+- For security-sensitive issues, direct to IT team directly
+- This is the default/fallback agent for unrouted Slack messages'
+
+write_if_missing "$WORKSPACE_DIR/agents/it-support/tools.md" \
+'## Available Tools
+- **web_search**: Search for troubleshooting guides, documentation
+- **web_fetch**: Read knowledge base articles, vendor docs
+- **exec**: Run diagnostic commands if needed
+
+## Common Escalation Paths
+- Security incidents → #security-alerts
+- Infrastructure → #infra-ops
+- Account access → IT admin team
+- HR questions → #ask-hr'
+
+echo "Agent workspace files initialized"
 
 # ============================================================
 # START GATEWAY
